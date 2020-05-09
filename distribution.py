@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 import scipy.stats as stats
 
 class NHTS_Data:
@@ -122,7 +121,7 @@ class NHTS_Data:
                 totals[key][second_key] = contents / sums[key]
         # Add the Markov model as an instance variable
         self._next_dists = dict()
-        for mode_name, mode_value in endpoint_map.items():
+        for mode_name, mode_value in self._endpoint_map.items():
             names = []
             probs = []
             dests = totals[mode_value]
@@ -177,7 +176,7 @@ class NHTS_Data:
             probs[0] += error
             from_name = self._flipped_endpoint_map[endpoint_vals[0]]
             to_name = self._flipped_endpoint_map[endpoint_vals[1]]
-            self._modes_distribution[(from_name, to_name)] = stats.discrete_rv(
+            self._mode_distributions[(from_name, to_name)] = stats.rv_discrete(
                     values=(np.array(names), np.array(probs)))
 
 
@@ -213,17 +212,17 @@ class NHTS_Data:
 
         # Next generate the distribution
         self._transport_dist = dict()
-        for key, values in self.is_exponpow.items():
+        for key, values in self._is_exponpow.items():
             dists = []
             dataset = worker_data[key]
             for i, is_exponpow in enumerate(values):
                 endpoints = dist_order[i]
                 datacol = dataset[(dataset.WHYFROM == self._endpoint_map[endpoints[0]]) &
-                        (dataset.WHYTO == self._endpoint_map[endpoints[1]])]
+                        (dataset.WHYTO == self._endpoint_map[endpoints[1]])].TRPMILES
                 if is_exponpow:
                     dists.append(self.generate_exponpow_dist(datacol))
                 else:
-                    dists.append(self.generate_exp_dist(datacol))
+                    dists.append(self.generate_expon_dist(datacol))
             self._transport_dist[key] = dists
 
     def generate_expon_dist(self, datacol):
@@ -254,6 +253,6 @@ class NHTS_Data:
         return self._flipped_endpoint_map[to_value]
 
     def sample_mode(self, from_endpoint, to_endpoint):
-        dist = self._modes_distribution[(from_endpoint, to_endpoint)]
+        dist = self._mode_distributions[(from_endpoint, to_endpoint)]
         mode_value = dist.rv()
         return self._flipped_mode_map[mode_value]
