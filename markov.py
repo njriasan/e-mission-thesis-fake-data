@@ -14,7 +14,7 @@ def create_tour(nhts_info):
     nextValue = None
     steps = []
     while nextValue != end:
-        nextValue = nhts_info.sample_desintation(prevValue)
+        nextValue = nhts_info.sample_destination(prevValue)
         mode = nhts_info.sample_mode(prevValue, nextValue)
         if nextValue == "Home":
             distance = "Home Distance"

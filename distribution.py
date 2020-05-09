@@ -245,14 +245,14 @@ class NHTS_Data:
         if is_exponpow:
             return stats.exponpow.rvs(b=dist[0], loc=dist[1], scale=dist[2])
         else:
-            return stats.expon(loc=dist[0], scale=dist[1])
+            return stats.expon.rvs(loc=dist[0], scale=dist[1])
 
     def sample_destination(self, from_endpoint):
         dist = self._next_dists[from_endpoint]
-        to_value = dist.rv()
+        to_value = dist.rvs()
         return self._flipped_endpoint_map[to_value]
 
     def sample_mode(self, from_endpoint, to_endpoint):
         dist = self._mode_distributions[(from_endpoint, to_endpoint)]
-        mode_value = dist.rv()
+        mode_value = dist.rvs()
         return self._flipped_mode_map[mode_value]
