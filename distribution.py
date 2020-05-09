@@ -83,6 +83,12 @@ class NHTS_Data:
         work = 3
         worker_data = worker_data[(worker_data.WHYFROM != work) | (worker_data.WHYTO != work)]
 
+        
+        self._endpoint_map = {"Home" : 1, "Work" : 3, "Buy Goods" : 11, "Buy Meals" : 13}
+        self._flipped_endpoint_map = {1 : "Home", 3 : "Work", 11 : "Buy Goods", 13 : "Buy Meals"}
+        self._mode_map = {"Walk" : 0, "Bike" : 1, "Car" : 2, "Transit" : 3}
+        self._flipped_mode_map = {0 : "Walk", 1 : "Bike", 2 : "Car", 3 : "Transit"}
+
         # Remove the impact of round trips
         # Reset the indices
         worker_data.reset_index(inplace=True, drop=True)
@@ -115,8 +121,22 @@ class NHTS_Data:
             for second_key, contents in val.items():
                 totals[key][second_key] = contents / sums[key]
         # Add the Markov model as an instance variable
-        worker_data.reset_index(inplace=True, drop=True)
+        self._next_dists = dict()
+        for mode_name, mode_value in endpoint_map.items():
+            names = []
+            probs = []
+            dests = totals[mode_value]
+            for dest_value, dest_prob in dests.items():
+                names.append(dest_value)
+                probs.append(dest_prob)
+            error = 1.0 - sum(probs)
+            probs[-1] += error
+            self._next_dists[mode_name] = stats.rv_discrete(
+                    values=(np.array(names), np.array(probs)))
 
+
+
+        worker_data.reset_index(inplace=True, drop=True)
         data = worker_data.groupby(["WHYFROM", "WHYTO","TRPTRANS"]).size()
         vals = data.iteritems()
 
@@ -131,13 +151,13 @@ class NHTS_Data:
             if directions not in sums:
                 sums[directions] = 0
             if trans_mode in walk_trips:
-                trans_mode = "walk"
+                trans_mode = "Walk"
             elif trans_mode in bike_trips:
-                trans_mode = "bike"
+                trans_mode = "Bike"
             elif trans_mode in car_trips:
-                trans_mode = "car"
+                trans_mode = "Car"
             else:
-                trans_mode = "transit"
+                trans_mode = "Transit"
             if trans_mode not in totals[directions]:
                 totals[directions][trans_mode] = 0
             totals[directions][trans_mode] += count
@@ -146,6 +166,20 @@ class NHTS_Data:
             for second_key, contents in val.items():
                 totals[key][second_key] = contents / sums[key]
         # Add instance variable for the distribution of selecting a mode of transportation
+        self._mode_distributions = dict()
+        for endpoint_vals, modes in totals.items():
+            names = []
+            probs = []
+            for mode_name, mode_prob in modes.items():
+                names.append(self._mode_map[mode_name])
+                probs.append(mode_prob)
+            error = 1.0 - sum(probs)
+            probs[0] += error
+            from_name = self._flipped_endpoint_map[endpoint_vals[0]]
+            to_name = self._flipped_endpoint_map[endpoint_vals[1]]
+            self._modes_distribution[(from_name, to_name)] = stats.discrete_rv(
+                    values=(np.array(names), np.array(probs)))
+
 
         # Separate by mode of transportation
         worker_data = {"Walk" : worker_data[worker_data.TRPTRANS.isin(walk_trips)],
@@ -155,7 +189,6 @@ class NHTS_Data:
 
         # Generate the distributions that were fitted based on empirical data
 
-        endpoint_map = {"Home" : 1, "Work" : 3, "Buy Goods" : 11, "Buy Meals" : 13}
 
         # Add names
         dist_order = [("Home", "Work"), ("Home", "Buy Goods"), 
@@ -185,8 +218,8 @@ class NHTS_Data:
             dataset = worker_data[key]
             for i, is_exponpow in enumerate(values):
                 endpoints = dist_order[i]
-                datacol = dataset[(dataset.WHYFROM == endpoint_map[endpoints[0]]) &
-                        (dataset.WHYTO == endpoint_map[endpoints[1]])]
+                datacol = dataset[(dataset.WHYFROM == self._endpoint_map[endpoints[0]]) &
+                        (dataset.WHYTO == self._endpoint_map[endpoints[1]])]
                 if is_exponpow:
                     dists.append(self.generate_exponpow_dist(datacol))
                 else:
@@ -214,3 +247,13 @@ class NHTS_Data:
             return stats.exponpow.rvs(b=dist[0], loc=dist[1], scale=dist[2])
         else:
             return stats.expon(loc=dist[0], scale=dist[1])
+
+    def sample_destination(self, from_endpoint):
+        dist = self._next_dists[from_endpoint]
+        to_value = dist.rv()
+        return self._flipped_endpoint_map[to_value]
+
+    def sample_mode(self, from_endpoint, to_endpoint):
+        dist = self._modes_distribution[(from_endpoint, to_endpoint)]
+        mode_value = dist.rv()
+        return self._flipped_mode_map[mode_value]
