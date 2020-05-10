@@ -1,6 +1,6 @@
 import argparse
 import distribution
-import markov
+import select_trips
 import decorate_tours
 
 if __name__ == '__main__':
@@ -16,6 +16,6 @@ if __name__ == '__main__':
         help="Number of fake tours to generate", default=100)
     args = parser.parse_args()
     if args.mode & 1:
-        markov.generate_tours(nhts_info, args.tour_json, args.num_tours)
+        select_trips.generate_tours(nhts_info, args.tour_json, args.num_tours)
     if args.mode & 2:
-        decorate_tours.decorate_tours(nhts_info, args.tour_json)
+        decorate_tours.decorate_tours(None, args.tour_json)
