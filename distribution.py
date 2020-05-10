@@ -9,9 +9,11 @@ class NHTS_Data:
         datafolder = "nhts-data/"
         perpub_file = datafolder + "perpub.csv"
         trippub_file = datafolder + "trippub.csv"
+
         # Load all of the raw data
         perpub_df = pd.read_csv(perpub_file)
         trippub_df = pd.read_csv(trippub_file)
+
         # Filter perpub to only include the data possibly relevant to our parameters
         # HOUSEID = household label
         # PERSONID = person number for household
@@ -33,8 +35,9 @@ class NHTS_Data:
         # R_AGE_IMP = Person age
         # WORKER = Are tehy a worker? 1 = Yes, 2 = No
 
-        kept_columns = ["HOUSEID", "PERSONID", "R_AGE_IMP", "WORKER", "TRAVDAY"]
+        kept_columns = ["HOUSEID", "PERSONID", "WORKER", "SCHTYP"]
         perpub_df_reduced = perpub_df[kept_columns]
+
         # Filter trippub to only include the data possibly relevant to our parameters
         # HOUSEID = household label
         # PERSONID = person number for household
@@ -47,8 +50,7 @@ class NHTS_Data:
         # WHYFROM = trip origin purpose. See https://nhts.ornl.gov/assets/codebook_v1.1.pdf for encoding.
         # WHYTO trip destination purpose
         # LOOP_TRIP = Are the start and end locations the same? 1 = Yes, 2 = No
-        # DWELTIME = Time at destination in minutes
-        kept_columns = ["HOUSEID", "PERSONID", "TDTRPNUM", "TRPMILES", "TRPTRANS", "WHYFROM", "LOOP_TRIP", "DWELTIME", "WHYTO", "STRTTIME"]
+        kept_columns = ["HOUSEID", "PERSONID", "TDTRPNUM", "TRPMILES", "TRPTRANS", "WHYFROM", "LOOP_TRIP", "WHYTO", "STRTTIME", "ENDTIME"]
         trippub_df_reduced = trippub_df[kept_columns]
 
         df_total = pd.merge(perpub_df_reduced, trippub_df_reduced, on=["HOUSEID","PERSONID"])
@@ -85,17 +87,47 @@ class NHTS_Data:
                 # Increase the trip number
                 spare_row['TDTRPNUM'] = spare_row['TDTRPNUM'] + 0.5
                 spare_rows.append(spare_row)
-        self.nhts_data = df_total.append(spare_rows, ignore_index=True)
+        df_total = df_total.append(spare_rows, ignore_index=True)
+        # Delete all home to home sections
+        df_total = df_total[~((df_total.WHYFROM == 1) & (df_total.WHYTO == 1))]
+        df_total = df_total[~((df_total.WHYFROM == 3) & (df_total.WHYTO == 3))]
+        # Save the remainder for querying
+        self.nhts_data = df_total
 
     # TODO add a way to filter
-    def sample_tour(self):
-        user_id = self.sample_user()
+    def sample_tour(self, is_student, is_worker):
+        user_id = self.sample_user(is_student, is_worker)
         user_df = self.nhts_data[self.nhts_data.USERID == user_id].sort_values('TDTRPNUM', ascending=True).reset_index(drop=True)
         return user_df
 
     # TODO add a way to filter
-    def sample_user(self):
+    def sample_user(self, is_student, is_worker):
+        student_encodings = [1, 2]
+        worker_encodings = [1]
+        student_op = 0 if is_student else 1
+        worker_op = 0 if is_worker else 1
+
+        sample_data = self.nhts_data[((student_op) ^ (self.nhts_data.SCHTYP.isin(student_encodings))) 
+            & ((worker_op) ^ (self.nhts_data.WORKER.isin(worker_encodings)))]
         user_ids = self.nhts_data.USERID.unique()
         upper_bound = user_ids.shape[0]
         return user_ids[np.random.randint(upper_bound)]
 
+class Synthpop_Data:
+
+    def __init__(self):
+        # Find the paths to all the synthpop provided data
+        datafolder = "synthpop-data/"
+        person_file = datafolder + "person.csv"
+        pop_df = pd.read_csv(person_file)
+        kept_columns = ["ESR", "SCH"]
+        self.synthpop_data = total_df = pop_df[kept_columns].reset_index(drop=True)
+
+    def sample_user(self):
+        student_options = [2.0, 3.0]
+        worker_options = [1.0, 2.0, 4.0, 5.0]
+        upper_bound = len(self.synthpop_data.index)
+        user_index = np.random.randint(upper_bound)
+        is_student = self.synthpop_data.at[user_index, "SCH"] in student_options
+        is_worker = self.synthpop_data.at[user_index, "ESR"] in worker_options
+        return (is_student, is_worker)

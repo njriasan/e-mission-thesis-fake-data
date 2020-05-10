@@ -4,7 +4,6 @@ import select_trips
 import decorate_tours
 
 if __name__ == '__main__':
-    nhts_info = distribution.NHTS_Data()
     parser = argparse.ArgumentParser()
     parser.add_argument("tour_json", type=str,
         help="Name of the intermediate file for the abstract tour model")
@@ -16,6 +15,8 @@ if __name__ == '__main__':
         help="Number of fake tours to generate", default=100)
     args = parser.parse_args()
     if args.mode & 1:
-        select_trips.generate_tours(nhts_info, args.tour_json, args.num_tours)
+        nhts_info = distribution.NHTS_Data()
+        synthpop_info = distribution.Synthpop_Data()
+        select_trips.generate_tours(nhts_info, synthpop_info, args.tour_json, args.num_tours)
     if args.mode & 2:
-        decorate_tours.decorate_tours(None, args.tour_json)
+        decorate_tours.decorate_tours(args.tour_json)
