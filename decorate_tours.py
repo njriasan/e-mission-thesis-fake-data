@@ -4,11 +4,13 @@ import json
 from lxml import etree
 import xml.dom.minidom as minidom
 from scipy.spatial.distance import euclidean
+import time
+
 
 query_template = "[out:json][timeout:25];\n(\n{});\nout body;\n>;"
 node_template = "    node[\"{}\"=\"{}\"]({bbox});\n"
 
-overpass_url = "https://lz4.overpass-api.de/"
+overpass_url = "http://0.0.0.0:80/"
 
 why_map = {1 : "Home", 2 : "Work from Home", 3 : "Work", 4 : "Work Trip", 5 : "Volunteering",
         6 : "Drop Off or Pick up", 7 : "Change Transportation", 8 : "School", 9 : "Child care",
@@ -33,7 +35,8 @@ childcare_searches = [("amenity", "nursery"), ("amenity", "childcare")]
 adultcare_searches = [("social_faclitity", "nursing_home"), ("amenity", "nursing_home")]
 
 goods_searches = [("amenity", "fuel"), ("shop", "department_store"), ("shop", "clothes"),
-        ("shop", "convenience"), ("shop", "supermarket"), ("shop", "mall")]
+        ("shop", "convenience"), ("shop", "supermarket"), ("shop", "mall"), ("shop", "country_store"),
+        ("shop", "general")]
 
 services_searches = [("amenity", "bank"), ("shop", "dry_cleaning"), ("shop", "laundry"), 
         ("shop", "car_repair")]
@@ -47,7 +50,7 @@ other_errands_searches = [("amenity", "library"), ("amenity", "mobile_library"),
 recreation_searches = [("leisure", "park"), ("tourism", "museum"), ("tourism", "gallery"), 
         ("amenity", "cinema"), ("amenity", "theatre"), ("amenity", "bar"), ("amenity", "pub")]
 
-exercise_searches = legal_searches + [("leisure", "fitness_station")]
+exercise_searches = legal_searches #+ [("leisure", "fitness_station")]
 
 healthcare_searches = [("amenity", "doctors"), ("amenity", "hospital"), ("amenity", "pharmacy"), 
         ("amenity", "clinic"), ("amenity", "dentist")]
@@ -62,7 +65,7 @@ search_map = {1 : home_searches, 2 : home_searches, 3 : work_searches,
         7 : legal_searches, 8 : school_searches, 9 : childcare_searches,
         10 : adultcare_searches, 11 : goods_searches, 12 : services_searches,
         13 : meals_searches, 14 : other_errands_searches, 15 : recreation_searches, 
-        16 : exercise_searches, 17 : home_searches, 18 : healthcare_searches,
+        16 : legal_searches, 17 : home_searches, 18 : healthcare_searches,
         19 : religious_searches, -9 : legal_searches, -8 : legal_searches,
         -7 : legal_searches, 97 : legal_searches}
 
@@ -81,14 +84,15 @@ def append_trips(base, endpoints, tour):
     plan_xml.set("selected", "yes")
     why = "home"
     for i, endpoint in enumerate(endpoints[:-1]):
-        action = etree.SubElement(plan_xml, "act")
-        action.set("type", why)
-        action.set("lat", str(endpoint["lat"]))
-        action.set("lon", str(endpoint["lon"]))
-        action.set("end_time", plan[i]['start time'])
-        leg = etree.SubElement(action, "leg")
-        leg.set ("mode", plan[i]["mode"])
-        why = why_map[plan[i]['dest_encoding']]
+        if not plan[i]['temp']:
+            action = etree.SubElement(plan_xml, "act")
+            action.set("type", why)
+            action.set("lat", str(endpoint["lat"]))
+            action.set("lon", str(endpoint["lon"]))
+            action.set("end_time", plan[i]['start time'])
+            leg = etree.SubElement(action, "leg")
+            leg.set ("mode", plan[i]["mode"])
+            why = why_map[plan[i]['dest_encoding']]
         
     endpoint = endpoints[-1]
     action = etree.SubElement(plan_xml, "act")
@@ -96,16 +100,27 @@ def append_trips(base, endpoints, tour):
     action.set("lat", str(endpoint["lat"]))
     action.set("lon", str(endpoint["lon"]))
 
-def decorate_tours(tour_json):
+logging_file = None
+
+def decorate_tours(tour_json, output_file):
     home_options = get_home_locations()
     plans = etree.Element('plans')
     with open(tour_json, "r") as f:
         tours = json.load(f)
-    for tour in tours:
-        append_trips(plans, decorate_tour(tour, home_options), tour)
+    with open("logs.txt", "w") as f:
+        global logging_file
+        logging_file = f
+        for i, tour in enumerate(tours):
+            decorated_tour = decorate_tour(tour, home_options)
+            if decorated_tour is None:
+                break
+            append_trips(plans, decorated_tour, tour)
+            print("On tour {} at time {}".format(i, time.time()), file=logging_file)
+            logging_file.flush()
     xml_str = etree.tostring(plans, encoding='utf8', method='xml', pretty_print=True)
-    with open("population.xml", "bw") as f:
+    with open(output_file, "bw") as f:
         f.write(xml_str)
+        f.flush()
 
     """
     distance_in_meters = 10000
@@ -140,12 +155,16 @@ def decorate_tour(tour_dict, home_options):
                 lat, lon = current_location['lat'], current_location['lon']
                 work = generate_data (dest, lat, lon, target_dist)
             current_location = work
+            if current_location is None:
+                return None
         else:
             dist_miles = action['dist']
             # Convert the data into a larger bounding box containing the four corners
             target_dist = dist_miles * miles2meter * meter2deg
             lat, lon = current_location['lat'], current_location['lon']
             current_location = generate_data (dest, lat, lon, target_dist)
+            if current_location is None:
+                return None
         endpoints.append(current_location)
     return endpoints
 
@@ -153,13 +172,33 @@ def generate_data(dest, lat, lon, target_distance):
     offset = target_distance * 2
     expand_search = True
     while expand_search:
-        locations = get_locations_in_box(lat - offset, lon - offset, 
-                lat + offset, lon + offset, search_map[dest])
-        expand_search = len(locations) == 0
-        if not expand_search:
-            current_location = get_closest_to_target(lat, lon, target_distance, locations) 
+        if len(search_map[dest]) == 0:
+            # Special case where we don't need a real location
+            expand_search = False
+            # We will now always advance the target distance. Sample
+            # a random direction.
+            angle = np.random.uniform(low=0.0, high=(2.0 * np.pi))
+            lat_change = np.cos(angle) * target_distance
+            lon_change = np.sin(angle) * target_distance
+            current_location = dict()
+            current_location['lat'] = lat + lat_change
+            current_location['lon'] = lon + lon_change
+
         else:
-            offset *= 2
+            locations = get_locations_in_box(lat - offset, lon - offset, 
+                    lat + offset, lon + offset, search_map[dest])
+            expand_search = len(locations) == 0
+            if not expand_search:
+                current_location = get_closest_to_target(lat, lon, target_distance, locations)
+            elif offset > 2500:
+                # The limit through the OSM API is 25 degrees, so set an out involving retrying when
+                return None
+            else:
+                print("Need to repeat the search at time : {}.".format(time.time()), file=logging_file)
+                print("Issue with search at location:({}, {}) with query set {}".format(lat, lon, search_map[dest]), file=logging_file)
+                print("Offset is {}".format(offset), file=logging_file)
+                print("Destination type is {}".format(dest), file=logging_file)
+                offset *= 1.5
     return current_location
 
 def get_closest_to_target(lat, lon, target_dist, locations):
@@ -206,36 +245,27 @@ def get_locations_in_box(min_lat, min_lon, max_lat, max_lon, searches):
     node_searches = [node_template.format(elem[0], elem[1], bbox=bbox_string) for elem in searches]
     combined_nodes = "".join(node_searches)
     overpass_query = query_template.format(combined_nodes)
-    #print(overpass_query)
     response = requests.post(overpass_url + "api/interpreter", data=overpass_query)
     try:
         all_results = response.json()["elements"]
     except json.decoder.JSONDecodeError as e:
-        logging.info("Unable to decode response with status_code %s, text %s" %
-            (response.status_code, response.text))
         time.sleep(5)
-        logging.info("Retrying after 5 second sleep")
         response = requests.post(overpass_url + "api/interpreter", data=overpass_query)
     try:
         all_results = response.json()["elements"]
     except json.decoder.JSONDecodeError as e:
-        logging.info("Unable to decode response with status_code %s, text %s" %
-            (response.status_code, response.text))
         if response.status_code == 429:
-            logging.info("Checking when a slot is available")
             response = requests.get(overpass_url + "api/status")
             status_string = response.text.split("\n")
             try:
                 available_slots = int(status_string[3].split(" ")[0])
                 if available_slots > 0:
-                    logging.info("No need to wait")
                     response = requests.post(overpass_url + "api/interpreter", data=overpass_query)
                     all_results = response.json()["elements"]
                 # Some api/status returns 0 slots available and then when they will be available
                 elif available_slots == 0:
                     min_waiting_time = min(int(status_string[4].split(" ")[5]), int(status_string[5].split(" ")[5]))
                     time.sleep(min_waiting_time)
-                    logging.info("Retrying after " + str(min_waiting_time) +  " second sleep")
                     response = requests.post(overpass_url + "api/interpreter", data=overpass_query)
                     all_results = response.json()["elements"]
             except ValueError as e:
@@ -243,11 +273,9 @@ def get_locations_in_box(min_lat, min_lon, max_lat, max_lon, searches):
                 try:
                     min_waiting_time = min(int(status_string[3].split(" ")[5]), int(status_string[4].split(" ")[5]))
                     time.sleep(min_waiting_time)
-                    logging.info("Retrying after " + str(min_waiting_time) +  " second sleep")
                     response = requests.post(overpass_url + "api/interpreter", data=overpass_query)
                     all_results = response.json()["elements"]
                 except ValueError as e:
-                    logging.info("Unable to find availables slots")
                     all_results = []
         else:
             all_results = []

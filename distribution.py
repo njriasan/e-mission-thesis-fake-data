@@ -72,6 +72,21 @@ class NHTS_Data:
         not_home_ids = not_home_df[(not_home_df.WHYTO != 1) & ~((not_home_df.WHYFROM == 1) & (not_home_df.LOOP_TRIP == 1))]
         ids_to_remove = np.concatenate((ids_to_remove, not_home_ids.USERID.unique()), axis=None)
 
+
+        # Get all home to home travelers
+        home_home_ids = df_total[((df_total.WHYFROM == 1) & (df_total.WHYTO == 1))].drop_duplicates(['USERID'])
+        ids_to_remove = np.concatenate((ids_to_remove, home_home_ids.USERID.unique()), axis=None)
+
+        # Get all work to work travelers
+        work_work_ids = df_total[((df_total.WHYFROM == 3) & (df_total.WHYTO == 3))].drop_duplicates(['USERID'])
+        ids_to_remove = np.concatenate((ids_to_remove, work_work_ids.USERID.unique()), axis=None)
+
+
+        # Get all negative trip distances and 0 distances
+        empty_trip_ids = df_total[df_total.TRPMILES <= 0.0].drop_duplicates(['USERID'])
+        ids_to_remove = np.concatenate((ids_to_remove, empty_trip_ids.USERID.unique()), axis=None)
+
+
         # Remove the ids
         df_total = df_total[~df_total.USERID.isin(ids_to_remove)]
 
@@ -86,11 +101,31 @@ class NHTS_Data:
                 spare_row["WHYTO"], spare_row["WHYFROM"]  = spare_row["WHYFROM"], spare_row["WHYTO"]
                 # Increase the trip number
                 spare_row['TDTRPNUM'] = spare_row['TDTRPNUM'] + 0.5
+
+                # Get a new end time and start time
+                start_time = spare_row["STRTTIME"]
+                end_time = spare_row["ENDTIME"]
+                hour_diff = ((end_time // 100) - (start_time // 100))
+                if hour_diff < 0:
+                    hour_diff = 23 - hour_diff
+                minute_diff = (hour_diff % 2) * 30
+                hour_diff = (hour_diff // 2)
+                minute_diff += ((end_time % 100) - (start_time % 100))
+                new_minutes = (start_time % 100) + minute_diff
+                if new_minutes > 59:
+                    hour_carry = 1
+                    new_minutes = new_minutes - 59
+                else:
+                    hour_carry = 0
+                    if new_minutes < 0:
+                        new_minutes = new_minutes + 59
+                new_hour = ((start_time // 100) + hour_carry + hour_diff) % 24
+                final_time = new_hour * 100 + new_minutes
+                df_total.at[i, "ENDTIME"] = final_time
+                spare_row["STRTIME"] = new_hour * 100 + new_minutes
+
                 spare_rows.append(spare_row)
         df_total = df_total.append(spare_rows, ignore_index=True)
-        # Delete all home to home sections
-        df_total = df_total[~((df_total.WHYFROM == 1) & (df_total.WHYTO == 1))]
-        df_total = df_total[~((df_total.WHYFROM == 3) & (df_total.WHYTO == 3))]
         # Save the remainder for querying
         self.nhts_data = df_total
 
